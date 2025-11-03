@@ -1,0 +1,8 @@
+{
+    "rewrites": [
+        {
+            "source": "/sse/:path*",
+            "destination": "https://134.33.72.209/:path*"
+        }
+    ]
+}
