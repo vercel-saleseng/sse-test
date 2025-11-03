@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	_ "embed"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -16,23 +15,15 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"sync/atomic"
 	"time"
 )
 
 //go:embed index.html
 var indexHTML string
 
-// Configuration
-var messageInterval *atomic.Int32
-
 func main() {
-	messageInterval = &atomic.Int32{}
-	messageInterval.Store(1000)
-
-	http.HandleFunc("/", serveHome)
-	http.HandleFunc("/events", handleSSE)
-	http.HandleFunc("/config", handleConfig)
+	http.HandleFunc("GET /", serveHome)
+	http.HandleFunc("GET /events", handleSSE)
 
 	// Generate self-signed certificate in memory
 	tlsCert, err := generateSelfSignedCert()
@@ -53,7 +44,6 @@ func main() {
 
 	port := ":443"
 	log.Printf("Server starting on https://localhost%s", port)
-	log.Printf("Default message interval: %v", time.Duration(messageInterval.Load())*time.Millisecond)
 	log.Fatal(server.ListenAndServeTLS("", ""))
 }
 
@@ -149,23 +139,68 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	interval := time.Second
+	payload := 0
+
+	intervalStr := r.URL.Query().Get("interval")
+	if intervalStr != "" {
+		intervalInt, err := strconv.Atoi(intervalStr)
+		if err != nil {
+			http.Error(w, "Invalid interval", http.StatusBadRequest)
+			return
+		}
+		interval = time.Duration(intervalInt) * time.Millisecond
+	}
+
+	payloadStr := r.URL.Query().Get("payload")
+	if payloadStr != "" {
+		var err error
+		payload, err = strconv.Atoi(payloadStr)
+		if err != nil {
+			http.Error(w, "Invalid payload", http.StatusBadRequest)
+			return
+		}
+	}
+
+	log.Printf("Starting request with interval %v and payload %d", interval, payload)
+
 	// Channel to signal when client disconnects
 	notify := r.Context().Done()
 
 	messageID := 0
 	sendMessage := func(t time.Time) {
 		messageID++
-		message := fmt.Sprintf("Message #%d at %s", messageID, t.Format("15:04:05.000"))
+		baseMessage := fmt.Sprintf("Message #%d at %s", messageID, t.Format("15:04:05.000"))
+
+		// Get current payload payload
+		var message string
+
+		if payload > 0 {
+			// Calculate how much padding we need
+			baseLen := len(baseMessage)
+			if payload > baseLen {
+				// Add padding to reach desired size
+				padding := make([]byte, payload-baseLen)
+				for i := range padding {
+					padding[i] = 'A' + byte(i%26) // Fill with A-Z pattern
+				}
+				message = baseMessage + " | " + string(padding)
+			} else {
+				message = baseMessage
+			}
+		} else {
+			message = baseMessage
+		}
 
 		// Send the message in SSE format
 		fmt.Fprintf(w, "data: %s\n\n", message)
 		flusher.Flush()
 
-		log.Printf("Sent: %s", message)
+		log.Printf("Sent: %s (size: %d bytes)", baseMessage, len(message))
 	}
 	sendMessage(time.Now())
 
-	ticker := time.NewTicker(time.Duration(messageInterval.Load()) * time.Millisecond)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	log.Printf("Client connected to SSE stream")
@@ -179,47 +214,4 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 			sendMessage(t)
 		}
 	}
-}
-
-// handleConfig handles configuration updates
-func handleConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var config struct {
-		Interval int32 `json:"interval"`
-	}
-
-	if err := r.ParseForm(); err != nil {
-		// Try JSON
-		decoder := r.Body
-		if err := json.NewDecoder(decoder).Decode(&config); err != nil {
-			http.Error(w, "Invalid request", http.StatusBadRequest)
-			return
-		}
-	} else {
-		// Try form data
-		intervalStr := r.FormValue("interval")
-		if intervalStr != "" {
-			interval, err := strconv.Atoi(intervalStr)
-			if err != nil {
-				http.Error(w, "Invalid interval", http.StatusBadRequest)
-				return
-			}
-			config.Interval = int32(interval)
-		}
-	}
-
-	if config.Interval < 100 {
-		http.Error(w, "Interval must be at least 100ms", http.StatusBadRequest)
-		return
-	}
-
-	messageInterval.Store(config.Interval)
-	log.Printf("Message interval updated to: %v", config.Interval*int32(time.Millisecond))
-
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"interval": %d}`, config.Interval)
 }

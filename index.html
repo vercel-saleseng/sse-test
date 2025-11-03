@@ -255,8 +255,11 @@
                 <label for="interval">Message Interval (milliseconds):</label>
                 <input type="number" id="interval" value="1000" min="100" step="100">
             </div>
+            <div class="control-group">
+                <label for="payloadSize">Payload Size (bytes, 0 = default small):</label>
+                <input type="number" id="payloadSize" value="0" min="0" step="100">
+            </div>
             <div>
-                <button id="updateBtn" onclick="updateInterval()">Update Interval</button>
                 <button id="connectBtn" onclick="connect()">Connect</button>
                 <button id="disconnectBtn" class="disconnect" onclick="disconnect()" disabled>Disconnect</button>
                 <button onclick="clearMessages()">Clear Messages</button>
@@ -274,6 +277,10 @@
             <div class="stat-card">
                 <span id="currentInterval" class="stat-value">1000</span>
                 <span class="stat-label">Current Interval (ms)</span>
+            </div>
+            <div class="stat-card">
+                <span id="currentPayloadSize" class="stat-value">0</span>
+                <span class="stat-label">Payload Size (bytes)</span>
             </div>
         </div>
         <div class="messages">
@@ -310,7 +317,12 @@
                 eventSource.close();
             }
 
-            eventSource = new EventSource(window.location.href+'/events');
+            const interval = document.getElementById('interval').value;
+            const payloadSize = document.getElementById('payloadSize').value;
+
+            const reqUrl = window.location.href + (window.location.href.endsWith('/') || '/') + `events?interval=${interval}&payload=${payloadSize}`
+
+            eventSource = new EventSource(reqUrl);
 
             eventSource.onopen = function () {
                 updateStatus(true);
@@ -358,30 +370,6 @@
                 updateStatus(false);
                 console.log('SSE connection closed');
             }
-        }
-
-        function updateInterval() {
-            const interval = document.getElementById('interval').value;
-
-            fetch(window.location.href+'/config', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ interval: parseInt(interval) })
-            })
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('currentInterval').textContent = data.interval;
-                    console.log('Interval updated to:', data.interval, 'ms');
-
-                    // Reconnect if already connected
-                    if (eventSource && eventSource.readyState === EventSource.OPEN) {
-                        disconnect();
-                        setTimeout(connect, 100);
-                    }
-                })
-                .catch(error => console.error('Error updating interval:', error));
         }
 
         function clearMessages() {
